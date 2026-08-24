@@ -1,0 +1,46 @@
+WorkBuddy 第三方 AIP 对接工具 v1.3
+
+一、版本说明
+- Windows 版：适用于 Windows 10/11
+- M 芯片版：适用于 Apple Silicon Mac（M1/M2/M3/M4）
+- Intel 芯片版：适用于 Intel Mac
+
+三个版本均使用苏苏 SS 深蓝图标。
+
+二、功能
+1. 管理多个 OpenAI-compatible 第三方 AI 供应商。
+2. 填写 API Base URL、API Key、默认模型和备注。
+3. 支持 Responses API 与 Chat Completions 两种协议标记。
+4. 调用供应商的 /models 接口拉取模型并测试连通性。
+5. 一键将已拉取的全部模型批量写入 WorkBuddy 的 models.json；同名模型更新，其他已有模型保留，写入前自动备份。空文件会自动初始化；损坏或无效 JSON 会先备份再自动重建。
+6. 设置当前供应商，配置自动备份。
+7. 导出 WorkBuddy AIP JSON 配置，便于后续在 WorkBuddy 连接器或自定义服务中使用。
+
+三、使用步骤
+1. 双击对应平台版本启动。
+2. 在左侧选择供应商，或点击“添加”创建新的供应商。
+3. 填入 API Base URL，例如 https://example.com/v1。
+4. 填入 API Key 和默认模型；API Key 在界面中默认隐藏。
+5. 点击“拉取模型”获取供应商可用的全部模型。
+6. 点击“批量配置到 WorkBuddy”，确认后会将全部模型写入 %USERPROFILE%\\.workbuddy\\models.json。
+7. 完全退出并重新打开 WorkBuddy，在“设置 > 模型”查看所有导入的模型。
+8. 点击“设为当前”保存当前选择；如需保存独立配置文件，可点击“导出 JSON”。
+
+四、数据位置
+- Windows/macOS：~/.workbuddy/workbuddy-aip/
+- 供应商配置：providers.json
+- 自动备份：backups/
+- 导出文件默认目录：exports/
+- WorkBuddy 模型文件：%USERPROFILE%\\.workbuddy\\models.json
+- WorkBuddy 模型备份：%USERPROFILE%\\.workbuddy\\model-backups/
+
+五、安全提示
+- API Key 保存在本机用户目录的 providers.json 中，请勿把该文件上传到公开仓库。
+- 导出的 JSON 包含 API Key，分享前请确认是否需要删除 provider.api_key 字段。
+- 批量配置功能会修改 WorkBuddy 的自定义模型文件 models.json，并在修改前自动备份；导入后必须重启 WorkBuddy 才会刷新模型列表。
+
+六、macOS Intel 首次启动
+- 必须使用完整的 Intel 修复版 ZIP，并由 macOS 自带归档实用工具解压；不要在 Windows 上解压后重新压缩 .app。
+- 首次启动请右键应用选择“打开”。如仍被拦截，到“系统设置 → 隐私与安全性”点击“仍要打开”。
+- 若 Finder 提示应用无法打开，请运行同目录的“Intel芯片版-首次启动修复.command”，它会修复入口执行权限、清除本次下载的隔离标记并启动应用。
+- 本工具不需要摄像头、麦克风、屏幕录制或辅助功能权限。
