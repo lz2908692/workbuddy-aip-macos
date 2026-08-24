@@ -627,6 +627,11 @@ class App:
 
 
 def main():
+    if "--self-test-tls" in sys.argv:
+        context = create_ssl_context()
+        if context.verify_mode != ssl.CERT_REQUIRED or not context.check_hostname:
+            raise RuntimeError("TLS 严格校验未启用")
+        return
     root = tk.Tk()
     App(root)
     root.mainloop()

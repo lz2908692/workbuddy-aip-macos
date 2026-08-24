@@ -63,10 +63,9 @@ jobs:
           CERTIFI_PEM="$(python -c 'import certifi; print(certifi.where())')"
           test -s "$CERTIFI_PEM"
           grep -q "BEGIN CERTIFICATE" "$CERTIFI_PEM"
-          test -f "$APP/Contents/Resources/certifi/cacert.pem"
-          grep -q "BEGIN CERTIFICATE" "$APP/Contents/Resources/certifi/cacert.pem"
           codesign --force --deep --sign - "$APP"
           test -x "$BIN"
+          "$BIN" --self-test-tls
           plutil -lint "$APP/Contents/Info.plist"
           file "$BIN"
           test "$(lipo -archs "$BIN")" = "x86_64"
@@ -86,8 +85,7 @@ jobs:
           BIN="$APP/Contents/MacOS/WorkBuddy第三方AIP对接工具-Intel芯片"
           test -x "$BIN"
           test "$(lipo -archs "$BIN")" = "x86_64"
-          test -f "$APP/Contents/Resources/certifi/cacert.pem"
-          grep -q "BEGIN CERTIFICATE" "$APP/Contents/Resources/certifi/cacert.pem"
+          "$BIN" --self-test-tls
           codesign --verify --deep --strict --verbose=2 "$APP"
           stat -f "%Sp %OLp %N" "$BIN"
           shasum -a 256 "WorkBuddy第三方AIP对接工具-Intel芯片版-v1.4-SSL修复版.zip"
