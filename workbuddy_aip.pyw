@@ -12,6 +12,7 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import certifi
@@ -128,13 +129,32 @@ def create_ssl_context():
     return context
 
 
+class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Prevent API credentials from leaking through unsafe redirects."""
+
+    def redirect_request(self, request, fp, code, message, headers, new_url):
+        redirected = super().redirect_request(request, fp, code, message, headers, new_url)
+        if redirected is None:
+            return None
+        old_parts = urllib.parse.urlsplit(request.full_url)
+        new_parts = urllib.parse.urlsplit(new_url)
+        if old_parts.scheme == "https" and new_parts.scheme != "https":
+            raise urllib.error.URLError("拒绝 HTTPS 降级重定向")
+        if (old_parts.scheme, old_parts.netloc) != (new_parts.scheme, new_parts.netloc):
+            redirected.remove_header("Authorization")
+        return redirected
+
+
 def request_json(url, api_key, timeout=20):
     headers = {"Accept": "application/json"}
     if api_key:
         headers["Authorization"] = "Bearer %s" % api_key
     req = urllib.request.Request(url, headers=headers)
-    context = create_ssl_context() if url.lower().startswith("https://") else None
-    with urllib.request.urlopen(req, timeout=timeout, context=context) as response:
+    handlers = [SafeRedirectHandler()]
+    if url.lower().startswith("https://"):
+        handlers.append(urllib.request.HTTPSHandler(context=create_ssl_context()))
+    opener = urllib.request.build_opener(*handlers)
+    with opener.open(req, timeout=timeout) as response:
         raw = response.read().decode("utf-8")
     return json.loads(raw)
 

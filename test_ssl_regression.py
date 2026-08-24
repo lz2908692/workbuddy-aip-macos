@@ -55,20 +55,49 @@ def main():
 
     calls = []
 
-    def fake_urlopen(request, timeout, context):
-        calls.append((request, timeout, context))
-        return FakeResponse()
+    class FakeOpener:
+        def open(self, request, timeout):
+            calls.append((request, timeout))
+            return FakeResponse()
 
-    with patch.object(module.urllib.request, "urlopen", side_effect=fake_urlopen):
+    captured_handlers = []
+
+    def fake_build_opener(*handlers):
+        captured_handlers.extend(handlers)
+        return FakeOpener()
+
+    with patch.object(module.urllib.request, "build_opener", side_effect=fake_build_opener):
         data = module.request_json("https://openkun.xyz/v1/models", "secret", timeout=7)
 
     assert data["data"][0]["id"] == "gpt-test"
-    request, timeout, request_context = calls[0]
+    request, timeout = calls[0]
     assert request.full_url == "https://openkun.xyz/v1/models"
     assert request.get_header("Authorization") == "Bearer secret"
     assert timeout == 7
+    https_handler = next(item for item in captured_handlers if isinstance(item, module.urllib.request.HTTPSHandler))
+    request_context = https_handler._context
     assert request_context.verify_mode == ssl.CERT_REQUIRED
     assert request_context.check_hostname is True
+
+    redirect = module.SafeRedirectHandler()
+    original = module.urllib.request.Request(
+        "https://openkun.xyz/v1/models",
+        headers={"Authorization": "Bearer secret"},
+    )
+    same_origin = redirect.redirect_request(
+        original, None, 302, "Found", {}, "https://openkun.xyz/v1/models?page=2"
+    )
+    assert same_origin.get_header("Authorization") == "Bearer secret"
+    cross_origin = redirect.redirect_request(
+        original, None, 302, "Found", {}, "https://example.com/v1/models"
+    )
+    assert cross_origin.get_header("Authorization") is None
+    try:
+        redirect.redirect_request(original, None, 302, "Found", {}, "http://openkun.xyz/v1/models")
+    except module.urllib.error.URLError:
+        pass
+    else:
+        raise AssertionError("HTTPS downgrade redirect must be rejected")
 
     print("SSL_REGRESSION_OK")
     print("version=%s" % module.APP_VERSION)
