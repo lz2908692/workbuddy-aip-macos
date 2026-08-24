@@ -6,17 +6,20 @@ import copy
 import json
 import os
 import shutil
+import ssl
 import subprocess
 import sys
 import threading
 import time
 import urllib.error
 import urllib.request
+
+import certifi
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 APP_NAME = "WorkBuddy 第三方 AIP 对接工具"
-APP_VERSION = "1.3"
+APP_VERSION = "1.4"
 APP_SLUG = "workbuddy-aip"
 WIRE_RESPONSES = "responses"
 WIRE_CHAT = "chat_completions"
@@ -114,12 +117,24 @@ def backup_providers():
     return path
 
 
+def create_ssl_context():
+    """Create a strict TLS context backed by certifi's Mozilla CA bundle."""
+    ca_bundle = certifi.where()
+    if not ca_bundle or not os.path.isfile(ca_bundle):
+        raise RuntimeError("可信 CA 证书包不可用，请重新安装本工具")
+    context = ssl.create_default_context(cafile=ca_bundle)
+    context.check_hostname = True
+    context.verify_mode = ssl.CERT_REQUIRED
+    return context
+
+
 def request_json(url, api_key, timeout=20):
     headers = {"Accept": "application/json"}
     if api_key:
         headers["Authorization"] = "Bearer %s" % api_key
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=timeout) as response:
+    context = create_ssl_context() if url.lower().startswith("https://") else None
+    with urllib.request.urlopen(req, timeout=timeout, context=context) as response:
         raw = response.read().decode("utf-8")
     return json.loads(raw)
 

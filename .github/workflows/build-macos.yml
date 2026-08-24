@@ -23,7 +23,11 @@ jobs:
           python-version: "3.12"
           architecture: "x64"
       - name: Install dependencies
-        run: python -m pip install --upgrade pip pyinstaller pillow
+        run: python -m pip install --upgrade pip pyinstaller pillow certifi
+      - name: Run TLS regression tests
+        run: |
+          python -m py_compile workbuddy_aip.pyw test_ssl_regression.py
+          python test_ssl_regression.py
       - name: Generate icon
         run: |
           python generate_icon_macos.py
@@ -38,6 +42,7 @@ jobs:
             --name "$APP_NAME" \
             --osx-bundle-identifier "$BUNDLE_ID" \
             --icon susu_icon.icns \
+            --collect-data certifi \
             --distpath dist-intel \
             --workpath build-intel \
             workbuddy_aip.pyw
@@ -53,8 +58,13 @@ jobs:
           /usr/libexec/PlistBuddy -c "Delete :CFBundleShortVersionString" "$APP/Contents/Info.plist" 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Delete :CFBundleVersion" "$APP/Contents/Info.plist" 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string $BUNDLE_ID" "$APP/Contents/Info.plist"
-          /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string 1.3" "$APP/Contents/Info.plist"
-          /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string 1.3.0" "$APP/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string 1.4" "$APP/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string 1.4.0" "$APP/Contents/Info.plist"
+          CERTIFI_PEM="$(python -c 'import certifi; print(certifi.where())')"
+          test -s "$CERTIFI_PEM"
+          grep -q "BEGIN CERTIFICATE" "$CERTIFI_PEM"
+          test -f "$APP/Contents/Resources/certifi/cacert.pem"
+          grep -q "BEGIN CERTIFICATE" "$APP/Contents/Resources/certifi/cacert.pem"
           codesign --force --deep --sign - "$APP"
           test -x "$BIN"
           plutil -lint "$APP/Contents/Info.plist"
@@ -66,32 +76,34 @@ jobs:
           cp "Intel芯片版-首次启动修复.command" release-intel/
           cp "Intel芯片版-使用说明.txt" release-intel/
           chmod 755 "release-intel/Intel芯片版-首次启动修复.command"
-          ditto -c -k --sequesterRsrc --keepParent release-intel "WorkBuddy第三方AIP对接工具-Intel芯片版-v1.3-修复版.zip"
+          ditto -c -k --sequesterRsrc --keepParent release-intel "WorkBuddy第三方AIP对接工具-Intel芯片版-v1.4-SSL修复版.zip"
       - name: Verify final Intel archive
         run: |
           set -euo pipefail
           mkdir archive-check
-          ditto -x -k "WorkBuddy第三方AIP对接工具-Intel芯片版-v1.3-修复版.zip" archive-check
+          ditto -x -k "WorkBuddy第三方AIP对接工具-Intel芯片版-v1.4-SSL修复版.zip" archive-check
           APP="archive-check/release-intel/WorkBuddy第三方AIP对接工具-Intel芯片.app"
           BIN="$APP/Contents/MacOS/WorkBuddy第三方AIP对接工具-Intel芯片"
           test -x "$BIN"
           test "$(lipo -archs "$BIN")" = "x86_64"
+          test -f "$APP/Contents/Resources/certifi/cacert.pem"
+          grep -q "BEGIN CERTIFICATE" "$APP/Contents/Resources/certifi/cacert.pem"
           codesign --verify --deep --strict --verbose=2 "$APP"
           stat -f "%Sp %OLp %N" "$BIN"
-          shasum -a 256 "WorkBuddy第三方AIP对接工具-Intel芯片版-v1.3-修复版.zip"
+          shasum -a 256 "WorkBuddy第三方AIP对接工具-Intel芯片版-v1.4-SSL修复版.zip"
       - name: Upload Intel release ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: WorkBuddy第三方AIP对接工具-Intel芯片版-v1.3-修复版
-          path: WorkBuddy第三方AIP对接工具-Intel芯片版-v1.3-修复版.zip
+          name: WorkBuddy第三方AIP对接工具-Intel芯片版-v1.4-SSL修复版
+          path: WorkBuddy第三方AIP对接工具-Intel芯片版-v1.4-SSL修复版.zip
           if-no-files-found: error
           retention-days: 30
       - name: Publish Intel release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: workbuddy-aip-intel-v1.3-fixed
-          name: WorkBuddy AIP Intel v1.3 Fixed
-          body: Intel macOS Ventura 13 compatible build. Packaged and verified on macOS Intel runner.
+          tag_name: workbuddy-aip-intel-v1.4-ssl-fixed
+          name: WorkBuddy AIP Intel v1.4 SSL Fixed
+          body: Intel macOS Ventura 13 compatible build with certifi Mozilla CA bundle and strict HTTPS certificate verification. Packaged and verified on a macOS Intel runner.
           prerelease: false
-          files: WorkBuddy第三方AIP对接工具-Intel芯片版-v1.3-修复版.zip
+          files: WorkBuddy第三方AIP对接工具-Intel芯片版-v1.4-SSL修复版.zip
 

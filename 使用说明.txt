@@ -1,4 +1,4 @@
-WorkBuddy 第三方 AIP 对接工具 v1.3
+WorkBuddy 第三方 AIP 对接工具 v1.4
 
 一、版本说明
 - Windows 版：适用于 Windows 10/11
@@ -15,6 +15,7 @@ WorkBuddy 第三方 AIP 对接工具 v1.3
 5. 一键将已拉取的全部模型批量写入 WorkBuddy 的 models.json；同名模型更新，其他已有模型保留，写入前自动备份。空文件会自动初始化；损坏或无效 JSON 会先备份再自动重建。
 6. 设置当前供应商，配置自动备份。
 7. 导出 WorkBuddy AIP JSON 配置，便于后续在 WorkBuddy 连接器或自定义服务中使用。
+8. v1.4 内置 certifi/Mozilla 可信 CA 证书包，修复部分 Intel Mac 请求 OpenKun 时的证书链错误；HTTPS 始终严格校验证书和主机名。
 
 三、使用步骤
 1. 双击对应平台版本启动。
