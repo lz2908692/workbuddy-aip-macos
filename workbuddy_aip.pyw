@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""WorkBuddy Third-Party AI Provider Manager V1.21."""
+"""WorkBuddy Third-Party AI Provider Manager V1.23."""
 
 import base64
 import copy
 import ctypes
 import hashlib
+import http.client
 import json
 import os
 import shutil
@@ -24,7 +25,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 APP_NAME = "WorkBuddy 第三方 AIP 对接工具"
-APP_VERSION = "1.22"
+APP_VERSION = "1.23"
 APP_SLUG = "workbuddy-aip"
 WIRE_RESPONSES = "responses"
 WIRE_CHAT = "chat_completions"
@@ -198,10 +199,34 @@ def unprotect_secret(value):
         raise RuntimeError("API Key 无法由当前 Windows 账户解密，请恢复对应账户的配置备份") from error
 
 
+def normalize_api_key(value):
+    """Normalize a copied key without changing valid interior characters."""
+    value = str(value or "").strip()
+    if value.lower().startswith("bearer "):
+        value = value[7:].strip()
+    return value
+
+
+def api_key_status(value):
+    key = normalize_api_key(value)
+    if not key:
+        return "未配置"
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
+    return "已配置，长度 %d，指纹 %s…%s" % (len(key), digest[:4], digest[-4:])
+
+
+def authentication_error_message(code, reason=""):
+    if int(code) == 401:
+        return "HTTP 401：API Key 未被服务端接受。请重新输入有效 Key，点击“保存配置”后再试。"
+    if int(code) == 403:
+        return "HTTP 403：API Key 已识别，但没有访问权限或账户状态受限。"
+    return "HTTP %s: %s" % (code, reason or "请求失败")
+
+
 def provider_for_storage(provider, index=0):
     stored = copy.deepcopy(provider)
     provider_key = "%s-%s" % (stored.get("key", "provider"), index)
-    stored["api_key"] = protect_secret(stored.get("api_key", ""), provider_key)
+    stored["api_key"] = protect_secret(normalize_api_key(stored.get("api_key", "")), provider_key)
     return stored
 
 
@@ -322,6 +347,7 @@ def _curl_config_quote(value):
 
 def _request_json_with_macos_curl(url, api_key, timeout):
     validate_remote_url(url)
+    api_key = normalize_api_key(api_key)
     fd, output_path = tempfile.mkstemp(prefix="workbuddy-aip-", suffix=".json")
     os.close(fd)
     config_lines = [
@@ -336,6 +362,7 @@ def _request_json_with_macos_curl(url, api_key, timeout):
         "max-time = %d" % max(1, int(timeout)),
         "max-filesize = %d" % MAX_RESPONSE_BYTES,
         "output = %s" % _curl_config_quote(output_path),
+        "write-out = %s" % _curl_config_quote("%{http_code}"),
         "header = %s" % _curl_config_quote("Accept: application/json"),
     ]
     if api_key:
@@ -344,11 +371,11 @@ def _request_json_with_macos_curl(url, api_key, timeout):
     config = ("\n".join(config_lines) + "\n").encode("utf-8")
     try:
         try:
-            subprocess.run(
+            result = subprocess.run(
                 ["/usr/bin/curl", "-q", "--config", "-"],
                 input=config,
                 check=True,
-                stdout=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 timeout=timeout + 5,
             )
@@ -356,6 +383,11 @@ def _request_json_with_macos_curl(url, api_key, timeout):
             detail = error.stderr.decode("utf-8", errors="replace").strip()
             if api_key:
                 detail = detail.replace(api_key, "***")
+            status_text = (error.stdout or b"").decode("ascii", errors="ignore").strip()
+            if status_text.isdigit() and int(status_text) >= 400:
+                raise urllib.error.HTTPError(
+                    url, int(status_text), http.client.responses.get(int(status_text), detail or "HTTP error"), {}, None
+                ) from error
             raise urllib.error.URLError("macOS 系统网络请求失败: %s" % (detail or "curl exit %s" % error.returncode)) from error
         except subprocess.TimeoutExpired as error:
             raise urllib.error.URLError("macOS 系统网络请求超时") from error
@@ -375,6 +407,7 @@ def _request_json_with_macos_curl(url, api_key, timeout):
 
 def request_json(url, api_key, timeout=20):
     validate_remote_url(url)
+    api_key = normalize_api_key(api_key)
     headers = {"Accept": "application/json"}
     if api_key:
         headers["Authorization"] = "Bearer %s" % api_key
@@ -399,6 +432,9 @@ def request_json(url, api_key, timeout=20):
 
 
 def fetch_models(base_url, api_key, timeout=20):
+    api_key = normalize_api_key(api_key)
+    if not api_key:
+        raise ValueError("未配置 API Key。请在供应商信息中输入 Key，点击“保存配置”后再试。")
     data = request_json(base_url.rstrip("/") + "/models", api_key, timeout)
     return [item["id"] for item in data.get("data", []) if item.get("id")]
 
@@ -677,6 +713,8 @@ class App:
             return None
         for key in self.vars:
             item[key] = self.vars[key].get().strip()
+        item["api_key"] = normalize_api_key(item.get("api_key", ""))
+        self.vars["api_key"].set(item["api_key"])
         item["wire_api"] = self.wire_var.get()
         values = list(self.model_combo["values"])
         if item["model"] and item["model"] not in values:
@@ -703,9 +741,16 @@ class App:
         if not self.validate(item):
             return
         backup = backup_providers()
-        save_providers(self.providers)
+        try:
+            save_providers(self.providers)
+        except Exception as error:
+            self.log("配置保存失败：%s" % error)
+            messagebox.showerror("保存失败", "API Key 未能安全写入系统凭据存储：\n%s" % error)
+            return
         self.refresh_list()
-        self.log("已保存「%s」配置%s" % (item["name"], "，旧配置已备份" if backup else ""))
+        self.log("已保存「%s」配置%s；API Key：%s" % (
+            item["name"], "，旧配置已备份" if backup else "", api_key_status(item.get("api_key"))
+        ))
 
     def activate_current(self):
         item = self.collect_current()
@@ -755,7 +800,11 @@ class App:
         if not item or not item["base_url"]:
             messagebox.showwarning("提示", "请先填写 API Base URL")
             return
-        self.log("正在请求 %s/models ..." % item["base_url"])
+        if not item.get("api_key"):
+            self.log("模型拉取已停止：未配置 API Key")
+            messagebox.showwarning("缺少 API Key", "请先输入 API Key 并点击“保存配置”，再拉取模型。")
+            return
+        self.log("正在请求 %s/models ...（API Key：%s）" % (item["base_url"], api_key_status(item["api_key"])))
         threading.Thread(
             target=self._fetch_models_worker,
             args=(item["key"], item["base_url"], item["api_key"]),
@@ -766,7 +815,7 @@ class App:
         try:
             models = fetch_models(base_url, api_key)
         except urllib.error.HTTPError as error:
-            self.log("模型拉取失败 HTTP %s: %s" % (error.code, error.reason))
+            self.log("模型拉取失败：%s" % authentication_error_message(error.code, error.reason))
             return
         except Exception as error:
             self.log("模型拉取失败: %s" % error)
@@ -823,7 +872,11 @@ class App:
         if not item or not item["base_url"]:
             messagebox.showwarning("提示", "请先填写 API Base URL")
             return
-        self.log("正在测试 %s ..." % item["base_url"])
+        if not item.get("api_key"):
+            self.log("连接测试已停止：未配置 API Key")
+            messagebox.showwarning("缺少 API Key", "请先输入 API Key 并点击“保存配置”，再测试连接。")
+            return
+        self.log("正在测试 %s ...（API Key：%s）" % (item["base_url"], api_key_status(item["api_key"])))
         threading.Thread(target=self._test_worker, args=(item["base_url"], item["api_key"]), daemon=True).start()
 
     def _test_worker(self, base_url, api_key):
@@ -831,7 +884,7 @@ class App:
             models = fetch_models(base_url, api_key, timeout=20)
             self.log("连接成功：/models 返回 %d 个模型" % len(models))
         except urllib.error.HTTPError as error:
-            self.log("连接失败 HTTP %s: %s" % (error.code, error.reason))
+            self.log("连接测试失败：%s" % authentication_error_message(error.code, error.reason))
         except Exception as error:
             self.log("连接失败: %s" % error)
 
@@ -897,7 +950,9 @@ class App:
     def refresh_status(self):
         item = next((provider for provider in self.providers if provider.get("active")), None)
         if item:
-            self.log("当前供应商：%s / %s" % (item.get("name"), item.get("model")))
+            self.log("当前供应商：%s / %s；API Key：%s" % (
+                item.get("name"), item.get("model"), api_key_status(item.get("api_key"))
+            ))
         else:
             self.log("当前未设置活动供应商")
 

@@ -1,4 +1,4 @@
-WorkBuddy 第三方 AIP 对接工具 V1.22
+WorkBuddy 第三方 AIP 对接工具 V1.23
 Intel 芯片版（macOS Ventura 13 及以上）
 
 【正确安装】
@@ -23,6 +23,8 @@ Intel 芯片版（macOS Ventura 13 及以上）
 - v1.4 修复包由 macOS Intel 构建机直接使用 ditto 打包，保留 .app 主入口执行权限；请勿在 Windows 上解压后重新压缩。
 - 内置 certifi/Mozilla 可信 CA 证书包，OpenKun 拉取模型和连接测试使用严格证书与主机名校验。
 - V1.22 修复 OpenKun 拉取模型时的 macOS TLS `UNEXPECTED_EOF_WHILE_READING`；优先使用严格 TLS，只有该特定 EOF 才安全回退到 macOS 系统网络栈。
+- V1.23 增强 API Key 认证诊断：空 Key 不再请求；自动清理重复的 Bearer 前缀；HTTP 401 会明确提示重新输入有效 Key 并保存；日志只显示 Key 长度和不可逆短指纹。
+- 若出现 HTTP 401：重新复制 OpenKun 当前有效 API Key 到输入框，点击“保存配置”，确认日志显示“API Key：已配置”，再点击“拉取模型”。
 - API Key 保存到当前 macOS 用户的系统钥匙串；providers.json 仅保存钥匙串引用。JSON 导出默认不包含 API Key。
 - 远程 API 必须使用 HTTPS，只有 localhost 本地服务允许 HTTP。
 - 工具数据位于 ~/.workbuddy/workbuddy-aip/，WorkBuddy 模型文件位于 ~/.workbuddy/models.json。

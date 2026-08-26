@@ -35,7 +35,7 @@ def load_module():
 
 def main():
     module = load_module()
-    assert module.APP_VERSION == "1.22"
+    assert module.APP_VERSION == "1.23"
 
     with tempfile.TemporaryDirectory(prefix="workbuddy-aip-v15-") as temp_dir:
         module.DATA_DIR = temp_dir
@@ -104,7 +104,7 @@ def main():
             output_line = next(line for line in config_text.splitlines() if line.startswith("output = "))
             output_path = output_line.split("=", 1)[1].strip().strip('"')
             Path(output_path).write_text(json.dumps({"data": [{"id": "gpt-curl"}]}), encoding="utf-8")
-            return types.SimpleNamespace(stderr=b"")
+            return types.SimpleNamespace(stdout=b"200", stderr=b"")
 
         with patch.object(module.subprocess, "run", side_effect=fake_curl) as run:
             data = module._request_json_with_macos_curl(
@@ -115,10 +115,38 @@ def main():
             assert args[0] == ["/usr/bin/curl", "-q", "--config", "-"]
             assert b"plain-secret" in kwargs["input"]
             assert "plain-secret" not in args[0]
-            assert kwargs["stdout"] is module.subprocess.DEVNULL
+            assert kwargs["stdout"] is module.subprocess.PIPE
+            assert b'write-out = "%{http_code}"' in kwargs["input"]
             assert b'proto = "=https"' in kwargs["input"]
             assert b'proto-redir = "=https"' in kwargs["input"]
             assert b"output = " in kwargs["input"]
+
+        def fake_curl_401(_command, **_kwargs):
+            error = module.subprocess.CalledProcessError(
+                22, _command, output=b"401", stderr=b"curl: (22) The requested URL returned error: 401"
+            )
+            raise error
+
+        with patch.object(module.subprocess, "run", side_effect=fake_curl_401):
+            try:
+                module._request_json_with_macos_curl(
+                    "https://openkun.xyz/v1/models", "plain-secret", 20
+                )
+            except module.urllib.error.HTTPError as error:
+                assert error.code == 401
+            else:
+                raise AssertionError("curl HTTP 401 was not preserved")
+
+        assert module.normalize_api_key("  Bearer plain-secret  ") == "plain-secret"
+        assert module.api_key_status("") == "未配置"
+        assert "长度 12" in module.api_key_status("plain-secret")
+        assert "重新输入有效 Key" in module.authentication_error_message(401, "Unauthorized")
+        try:
+            module.fetch_models("https://openkun.xyz/v1", "")
+        except ValueError as error:
+            assert "未配置 API Key" in str(error)
+        else:
+            raise AssertionError("empty API key accepted")
 
         class EofOpener:
             def open(self, *_args, **_kwargs):

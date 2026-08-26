@@ -1,6 +1,15 @@
-# WorkBuddy 第三方 AIP 对接工具 V1.22
+# WorkBuddy 第三方 AIP 对接工具 V1.23
 
 本项目提供一个本地桌面配置管理器，用于管理 WorkBuddy 可使用的 OpenAI-compatible 第三方 AI API 参数。
+
+## V1.23 API Key 认证诊断修复
+
+- 空 API Key 不再发起 `/models` 请求，直接提示先输入并保存。
+- 自动清理复制 Key 时附带的前后空格和重复 `Bearer ` 前缀，避免发送 `Bearer Bearer ...`。
+- 保存、拉取、测试和刷新状态时显示 Key 长度及不可逆 SHA-256 短指纹，不输出 Key 明文。
+- HTTP 401 明确提示 Key 未被服务端接受，不再误报为普通“连接失败”；HTTP 403 明确区分为权限或账户状态问题。
+- macOS TLS EOF 的系统 curl 回退现在保留 HTTP 状态码，认证失败仍可正确识别为 401。
+- 修复真实连通测试读取 `keychain:` 引用时没有先从 macOS 钥匙串解密的问题。
 
 ## V1.22 macOS 网络兼容修复
 
