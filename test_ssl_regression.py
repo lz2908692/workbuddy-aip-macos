@@ -49,9 +49,11 @@ class FakeResponse:
 def main():
     module = load_module()
     context = module.create_ssl_context()
-    assert module.APP_VERSION == "1.21"
+    assert module.APP_VERSION == "1.22"
     assert context.verify_mode == ssl.CERT_REQUIRED
     assert context.check_hostname is True
+    if getattr(ssl, "OP_IGNORE_UNEXPECTED_EOF", 0):
+        assert context.options & ssl.OP_IGNORE_UNEXPECTED_EOF
     assert os.path.isfile(module.certifi.where())
     assert os.path.getsize(module.certifi.where()) > 0
 

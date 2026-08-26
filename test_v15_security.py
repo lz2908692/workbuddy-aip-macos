@@ -35,7 +35,7 @@ def load_module():
 
 def main():
     module = load_module()
-    assert module.APP_VERSION == "1.21"
+    assert module.APP_VERSION == "1.22"
 
     with tempfile.TemporaryDirectory(prefix="workbuddy-aip-v15-") as temp_dir:
         module.DATA_DIR = temp_dir
@@ -98,6 +98,47 @@ def main():
                 pass
             else:
                 raise AssertionError("unsafe URL accepted: %s" % url)
+
+        def fake_curl(_command, **kwargs):
+            config_text = kwargs["input"].decode("utf-8")
+            output_line = next(line for line in config_text.splitlines() if line.startswith("output = "))
+            output_path = output_line.split("=", 1)[1].strip().strip('"')
+            Path(output_path).write_text(json.dumps({"data": [{"id": "gpt-curl"}]}), encoding="utf-8")
+            return types.SimpleNamespace(stderr=b"")
+
+        with patch.object(module.subprocess, "run", side_effect=fake_curl) as run:
+            data = module._request_json_with_macos_curl(
+                "https://openkun.xyz/v1/models", "plain-secret", 20
+            )
+            assert data["data"][0]["id"] == "gpt-curl"
+            args, kwargs = run.call_args
+            assert args[0] == ["/usr/bin/curl", "-q", "--config", "-"]
+            assert b"plain-secret" in kwargs["input"]
+            assert "plain-secret" not in args[0]
+            assert kwargs["stdout"] is module.subprocess.DEVNULL
+            assert b'proto = "=https"' in kwargs["input"]
+            assert b'proto-redir = "=https"' in kwargs["input"]
+            assert b"output = " in kwargs["input"]
+
+        class EofOpener:
+            def open(self, *_args, **_kwargs):
+                raise module.urllib.error.URLError(
+                    "[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol"
+                )
+
+        with patch.object(module.sys, "platform", "darwin"), patch.object(
+            module.urllib.request, "build_opener", return_value=EofOpener()
+        ), patch.object(
+            module, "_request_json_with_macos_curl", return_value={"data": [{"id": "fallback"}]}
+        ) as fallback:
+            data = module.request_json("https://openkun.xyz/v1/models", "plain-secret")
+            assert data["data"][0]["id"] == "fallback"
+            fallback.assert_called_once_with("https://openkun.xyz/v1/models", "plain-secret", 20)
+
+        non_eof = module.urllib.error.URLError("certificate verify failed")
+        assert module._is_unexpected_tls_eof(non_eof) is False
+        eof_error = module.urllib.error.URLError("[SSL: UNEXPECTED_EOF_WHILE_READING]")
+        assert module._is_unexpected_tls_eof(eof_error) is True
 
         class LargeResponse:
             headers = {"Content-Length": str(module.MAX_RESPONSE_BYTES + 1)}

@@ -12,6 +12,7 @@ import shutil
 import ssl
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -23,7 +24,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 APP_NAME = "WorkBuddy 第三方 AIP 对接工具"
-APP_VERSION = "1.21"
+APP_VERSION = "1.22"
 APP_SLUG = "workbuddy-aip"
 WIRE_RESPONSES = "responses"
 WIRE_CHAT = "chat_completions"
@@ -267,6 +268,9 @@ def create_ssl_context():
     context = ssl.create_default_context(cafile=ca_bundle)
     context.check_hostname = True
     context.verify_mode = ssl.CERT_REQUIRED
+    ignore_eof = getattr(ssl, "OP_IGNORE_UNEXPECTED_EOF", 0)
+    if ignore_eof:
+        context.options |= ignore_eof
     return context
 
 
@@ -302,6 +306,73 @@ def validate_remote_url(url):
     return parts
 
 
+def _is_unexpected_tls_eof(error):
+    current = error
+    while current is not None:
+        text = str(current).upper()
+        if "UNEXPECTED_EOF_WHILE_READING" in text or "EOF OCCURRED IN VIOLATION OF PROTOCOL" in text:
+            return True
+        current = getattr(current, "reason", None) or getattr(current, "__cause__", None)
+    return False
+
+
+def _curl_config_quote(value):
+    return '"%s"' % value.replace("\\", "\\\\").replace('"', '\\"').replace("\r", "").replace("\n", "")
+
+
+def _request_json_with_macos_curl(url, api_key, timeout):
+    validate_remote_url(url)
+    fd, output_path = tempfile.mkstemp(prefix="workbuddy-aip-", suffix=".json")
+    os.close(fd)
+    config_lines = [
+        "silent",
+        "show-error",
+        "fail",
+        "proto = \"=https\"",
+        "proto-redir = \"=https\"",
+        "location",
+        "max-redirs = 5",
+        "connect-timeout = %d" % max(1, min(int(timeout), 20)),
+        "max-time = %d" % max(1, int(timeout)),
+        "max-filesize = %d" % MAX_RESPONSE_BYTES,
+        "output = %s" % _curl_config_quote(output_path),
+        "header = %s" % _curl_config_quote("Accept: application/json"),
+    ]
+    if api_key:
+        config_lines.append("header = %s" % _curl_config_quote("Authorization: Bearer %s" % api_key))
+    config_lines.append("url = %s" % _curl_config_quote(url))
+    config = ("\n".join(config_lines) + "\n").encode("utf-8")
+    try:
+        try:
+            subprocess.run(
+                ["/usr/bin/curl", "-q", "--config", "-"],
+                input=config,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                timeout=timeout + 5,
+            )
+        except subprocess.CalledProcessError as error:
+            detail = error.stderr.decode("utf-8", errors="replace").strip()
+            if api_key:
+                detail = detail.replace(api_key, "***")
+            raise urllib.error.URLError("macOS 系统网络请求失败: %s" % (detail or "curl exit %s" % error.returncode)) from error
+        except subprocess.TimeoutExpired as error:
+            raise urllib.error.URLError("macOS 系统网络请求超时") from error
+        if os.path.getsize(output_path) > MAX_RESPONSE_BYTES:
+            raise ValueError("API 响应超过 8 MB 安全上限")
+        with open(output_path, "rb") as response_file:
+            raw_bytes = response_file.read(MAX_RESPONSE_BYTES + 1)
+        if len(raw_bytes) > MAX_RESPONSE_BYTES:
+            raise ValueError("API 响应超过 8 MB 安全上限")
+        return json.loads(raw_bytes.decode("utf-8-sig"))
+    finally:
+        try:
+            os.remove(output_path)
+        except OSError:
+            pass
+
+
 def request_json(url, api_key, timeout=20):
     validate_remote_url(url)
     headers = {"Accept": "application/json"}
@@ -312,11 +383,16 @@ def request_json(url, api_key, timeout=20):
     if url.lower().startswith("https://"):
         handlers.append(urllib.request.HTTPSHandler(context=create_ssl_context()))
     opener = urllib.request.build_opener(*handlers)
-    with opener.open(req, timeout=timeout) as response:
-        declared_length = response.headers.get("Content-Length")
-        if declared_length and int(declared_length) > MAX_RESPONSE_BYTES:
-            raise ValueError("API 响应超过 8 MB 安全上限")
-        raw_bytes = response.read(MAX_RESPONSE_BYTES + 1)
+    try:
+        with opener.open(req, timeout=timeout) as response:
+            declared_length = response.headers.get("Content-Length")
+            if declared_length and int(declared_length) > MAX_RESPONSE_BYTES:
+                raise ValueError("API 响应超过 8 MB 安全上限")
+            raw_bytes = response.read(MAX_RESPONSE_BYTES + 1)
+    except Exception as error:
+        if sys.platform == "darwin" and url.lower().startswith("https://") and _is_unexpected_tls_eof(error):
+            return _request_json_with_macos_curl(url, api_key, timeout)
+        raise
     if len(raw_bytes) > MAX_RESPONSE_BYTES:
         raise ValueError("API 响应超过 8 MB 安全上限")
     return json.loads(raw_bytes.decode("utf-8-sig"))
