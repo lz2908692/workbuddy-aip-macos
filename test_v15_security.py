@@ -85,6 +85,12 @@ def main():
 
         module.validate_remote_url("https://openkun.xyz/v1")
         module.validate_remote_url("http://localhost:8080/v1")
+        with patch.object(module.sys, "platform", "darwin"), patch.object(module.subprocess, "run") as run:
+            module.open_macos_privacy_settings()
+            run.assert_called_once_with(
+                ["open", "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension"],
+                check=True,
+            )
         for url in ("http://openkun.xyz/v1", "https://user:pass@openkun.xyz/v1", "file:///tmp/models"):
             try:
                 module.validate_remote_url(url)
