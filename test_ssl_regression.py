@@ -40,14 +40,16 @@ class FakeResponse:
     def __exit__(self, _type, _value, _traceback):
         return False
 
-    def read(self):
+    headers = {}
+
+    def read(self, _size=-1):
         return json.dumps({"data": [{"id": "gpt-test"}]}).encode("utf-8")
 
 
 def main():
     module = load_module()
     context = module.create_ssl_context()
-    assert module.APP_VERSION == "1.4"
+    assert module.APP_VERSION == "1.21"
     assert context.verify_mode == ssl.CERT_REQUIRED
     assert context.check_hostname is True
     assert os.path.isfile(module.certifi.where())
@@ -98,6 +100,34 @@ def main():
         pass
     else:
         raise AssertionError("HTTPS downgrade redirect must be rejected")
+    local_original = module.urllib.request.Request("http://localhost:8000/v1/models")
+    try:
+        redirect.redirect_request(local_original, None, 302, "Found", {}, "http://example.com/v1/models")
+    except module.urllib.error.URLError:
+        pass
+    else:
+        raise AssertionError("Local HTTP must not redirect to remote HTTP")
+
+    module.validate_remote_url("https://openkun.xyz/v1")
+    module.validate_remote_url("http://127.0.0.1:8000/v1")
+    for unsafe_url in ("http://openkun.xyz/v1", "ftp://openkun.xyz/v1", "https://user:pass@openkun.xyz/v1"):
+        try:
+            module.validate_remote_url(unsafe_url)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("Unsafe URL must be rejected: %s" % unsafe_url)
+
+    provider = {"key": "test", "name": "Test", "base_url": "https://example.com/v1", "wire_api": "responses", "model": "gpt-test", "api_key": "secret"}
+    assert module.build_export(provider)["provider"]["api_key"] == ""
+    assert module.build_export(provider)["provider"]["api_key_included"] is False
+    assert module.build_export(provider, include_api_key=True)["provider"]["api_key"] == "secret"
+
+    if sys.platform.startswith("win"):
+        encrypted = module.protect_secret("secret", "test")
+        assert encrypted.startswith(module.SECRET_PREFIX)
+        assert "secret" not in encrypted
+        assert module.unprotect_secret(encrypted) == "secret"
 
     print("SSL_REGRESSION_OK")
     print("version=%s" % module.APP_VERSION)

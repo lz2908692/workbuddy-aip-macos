@@ -24,20 +24,29 @@ def find_font(size):
             continue
     return ImageFont.load_default()
 
-for size in (16, 32, 128, 256, 512):
-    image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+def render_icon(size):
+    scale = 4
+    canvas = size * scale
+    image = Image.new("RGBA", (canvas, canvas), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
-    margin = max(1, int(size * 0.05))
-    draw.ellipse((margin, margin, size - margin, size - margin), fill=(40, 96, 225, 255))
-    font = find_font(max(8, int(size * 0.48)))
+    margin = max(scale, int(canvas * 0.065))
+    draw.ellipse(
+        (margin, margin, canvas - margin - 1, canvas - margin - 1),
+        fill=(40, 96, 225, 255),
+    )
+    font = find_font(max(8, int(canvas * 0.43)))
     box = draw.textbbox((0, 0), "SS", font=font)
     width = box[2] - box[0]
     height = box[3] - box[1]
-    x = (size - width) // 2 - box[0]
-    y = int(size * 0.66) - height - box[1]
+    x = (canvas - width) // 2 - box[0]
+    y = (canvas - height) // 2 - box[1] - int(canvas * 0.015)
     draw.text((x, y), "SS", font=font, fill=(255, 255, 255, 255))
+    return image.resize((size, size), Image.Resampling.LANCZOS)
+
+
+for size in (16, 32, 128, 256, 512):
+    image = render_icon(size)
     image.save(os.path.join(ICONSET, "icon_%dx%d.png" % (size, size)))
     if size <= 256:
-        image.resize((size * 2, size * 2), Image.Resampling.LANCZOS).save(
-            os.path.join(ICONSET, "icon_%dx%d@2x.png" % (size, size)))
+        render_icon(size * 2).save(os.path.join(ICONSET, "icon_%dx%d@2x.png" % (size, size)))
 print(ICONSET)

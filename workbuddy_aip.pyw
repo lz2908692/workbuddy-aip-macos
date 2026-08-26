@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""WorkBuddy Third-Party AI Provider Manager v1.0."""
+"""WorkBuddy Third-Party AI Provider Manager V1.21."""
 
+import base64
 import copy
+import ctypes
+import hashlib
 import json
 import os
 import shutil
@@ -20,10 +23,14 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 APP_NAME = "WorkBuddy 第三方 AIP 对接工具"
-APP_VERSION = "1.4"
+APP_VERSION = "1.21"
 APP_SLUG = "workbuddy-aip"
 WIRE_RESPONSES = "responses"
 WIRE_CHAT = "chat_completions"
+SECRET_PREFIX = "dpapi:"
+KEYCHAIN_PREFIX = "keychain:"
+KEYCHAIN_SERVICE = "com.susu.workbuddy-aip"
+MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(os.path.expanduser("~"), ".workbuddy", APP_SLUG)
@@ -80,16 +87,149 @@ def clone_defaults():
     return copy.deepcopy(DEFAULT_PROVIDERS)
 
 
+def _protect_windows_secret(value):
+    class DataBlob(ctypes.Structure):
+        _fields_ = [("cbData", ctypes.c_ulong), ("pbData", ctypes.POINTER(ctypes.c_ubyte))]
+
+    raw = value.encode("utf-8")
+    buffer = ctypes.create_string_buffer(raw)
+    source = DataBlob(len(raw), ctypes.cast(buffer, ctypes.POINTER(ctypes.c_ubyte)))
+    protected = DataBlob()
+    if not ctypes.windll.crypt32.CryptProtectData(
+        ctypes.byref(source), None, None, None, None, 1, ctypes.byref(protected)
+    ):
+        raise ctypes.WinError()
+    try:
+        encrypted = ctypes.string_at(protected.pbData, protected.cbData)
+        return SECRET_PREFIX + base64.b64encode(encrypted).decode("ascii")
+    finally:
+        local_free = ctypes.windll.kernel32.LocalFree
+        local_free.argtypes = [ctypes.c_void_p]
+        local_free.restype = ctypes.c_void_p
+        local_free(ctypes.cast(protected.pbData, ctypes.c_void_p))
+
+
+def _unprotect_windows_secret(value):
+    class DataBlob(ctypes.Structure):
+        _fields_ = [("cbData", ctypes.c_ulong), ("pbData", ctypes.POINTER(ctypes.c_ubyte))]
+
+    encrypted = base64.b64decode(value[len(SECRET_PREFIX):], validate=True)
+    buffer = ctypes.create_string_buffer(encrypted)
+    source = DataBlob(len(encrypted), ctypes.cast(buffer, ctypes.POINTER(ctypes.c_ubyte)))
+    plain = DataBlob()
+    if not ctypes.windll.crypt32.CryptUnprotectData(
+        ctypes.byref(source), None, None, None, None, 0, ctypes.byref(plain)
+    ):
+        raise ctypes.WinError()
+    try:
+        return ctypes.string_at(plain.pbData, plain.cbData).decode("utf-8")
+    finally:
+        local_free = ctypes.windll.kernel32.LocalFree
+        local_free.argtypes = [ctypes.c_void_p]
+        local_free.restype = ctypes.c_void_p
+        local_free(ctypes.cast(plain.pbData, ctypes.c_void_p))
+
+
+def _keychain_account(provider_key, value):
+    digest = hashlib.sha256((provider_key + "\0" + value).encode("utf-8")).hexdigest()[:24]
+    return "provider-%s-api-key" % digest
+
+
+def _security_quote(value):
+    return '"%s"' % value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _save_macos_secret(provider_key, value):
+    account = _keychain_account(provider_key, value)
+    command = "add-generic-password -U -s %s -a %s -w %s\n" % (
+        _security_quote(KEYCHAIN_SERVICE),
+        _security_quote(account),
+        _security_quote(value),
+    )
+    subprocess.run(
+        ["security", "-i"],
+        input=command,
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    return KEYCHAIN_PREFIX + account
+
+
+def _load_macos_secret(reference):
+    account = reference[len(KEYCHAIN_PREFIX):]
+    result = subprocess.run(
+        ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", account, "-w"],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    return result.stdout.rstrip("\r\n")
+
+
+def protect_secret(value, provider_key="provider"):
+    if not value or value.startswith((SECRET_PREFIX, KEYCHAIN_PREFIX)):
+        return value
+    if sys.platform.startswith("win"):
+        return _protect_windows_secret(value)
+    if sys.platform == "darwin":
+        return _save_macos_secret(provider_key, value)
+    return value
+
+
+def unprotect_secret(value):
+    if not value or not value.startswith((SECRET_PREFIX, KEYCHAIN_PREFIX)):
+        return value
+    if value.startswith(KEYCHAIN_PREFIX):
+        if sys.platform != "darwin":
+            raise RuntimeError("该 API Key 保存在 macOS 钥匙串，只能在原 macOS 账户中读取")
+        try:
+            return _load_macos_secret(value)
+        except Exception as error:
+            raise RuntimeError("无法从 macOS 钥匙串读取 API Key，请重新输入并保存") from error
+    if not sys.platform.startswith("win"):
+        raise RuntimeError("该 API Key 由 Windows 用户凭据加密，只能在原 Windows 账户中解密")
+    try:
+        return _unprotect_windows_secret(value)
+    except Exception as error:
+        raise RuntimeError("API Key 无法由当前 Windows 账户解密，请恢复对应账户的配置备份") from error
+
+
+def provider_for_storage(provider, index=0):
+    stored = copy.deepcopy(provider)
+    provider_key = "%s-%s" % (stored.get("key", "provider"), index)
+    stored["api_key"] = protect_secret(stored.get("api_key", ""), provider_key)
+    return stored
+
+
 def load_providers():
     ensure_dirs()
     if os.path.exists(PROVIDERS_FILE):
         try:
-            with open(PROVIDERS_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, list) and data:
-                return data
-        except (OSError, ValueError):
-            pass
+            with open(PROVIDERS_FILE, "r", encoding="utf-8-sig") as f:
+                stored = json.load(f)
+        except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+            stored = None
+        if isinstance(stored, list) and stored:
+            migrated = False
+            providers = []
+            for item in stored:
+                if not isinstance(item, dict):
+                    continue
+                provider = copy.deepcopy(item)
+                secret = provider.get("api_key", "")
+                if secret.startswith((SECRET_PREFIX, KEYCHAIN_PREFIX)):
+                    provider["api_key"] = unprotect_secret(secret)
+                elif secret and (sys.platform.startswith("win") or sys.platform == "darwin"):
+                    migrated = True
+                providers.append(provider)
+            if providers:
+                if migrated:
+                    backup_providers()
+                    save_providers(providers)
+                return providers
     data = clone_defaults()
     save_providers(data)
     return data
@@ -98,8 +238,9 @@ def load_providers():
 def save_providers(providers):
     ensure_dirs()
     tmp = PROVIDERS_FILE + ".tmp"
+    stored = [provider_for_storage(item, index) for index, item in enumerate(providers)]
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(providers, f, ensure_ascii=False, indent=2)
+        json.dump(stored, f, ensure_ascii=False, indent=2)
     os.replace(tmp, PROVIDERS_FILE)
 
 
@@ -137,7 +278,10 @@ class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
         if redirected is None:
             return None
         old_parts = urllib.parse.urlsplit(request.full_url)
-        new_parts = urllib.parse.urlsplit(new_url)
+        try:
+            new_parts = validate_remote_url(new_url)
+        except ValueError as error:
+            raise urllib.error.URLError(str(error)) from error
         if old_parts.scheme == "https" and new_parts.scheme != "https":
             raise urllib.error.URLError("拒绝 HTTPS 降级重定向")
         if (old_parts.scheme, old_parts.netloc) != (new_parts.scheme, new_parts.netloc):
@@ -145,7 +289,21 @@ class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
         return redirected
 
 
+def validate_remote_url(url):
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        raise ValueError("API URL 必须是有效的 HTTP(S) 地址")
+    hostname = parts.hostname.lower()
+    local_hosts = {"localhost", "127.0.0.1", "::1"}
+    if parts.scheme != "https" and hostname not in local_hosts:
+        raise ValueError("远程 API 必须使用 HTTPS；HTTP 仅允许 localhost 本地服务")
+    if parts.username or parts.password:
+        raise ValueError("API URL 不允许包含用户名或密码")
+    return parts
+
+
 def request_json(url, api_key, timeout=20):
+    validate_remote_url(url)
     headers = {"Accept": "application/json"}
     if api_key:
         headers["Authorization"] = "Bearer %s" % api_key
@@ -155,8 +313,13 @@ def request_json(url, api_key, timeout=20):
         handlers.append(urllib.request.HTTPSHandler(context=create_ssl_context()))
     opener = urllib.request.build_opener(*handlers)
     with opener.open(req, timeout=timeout) as response:
-        raw = response.read().decode("utf-8")
-    return json.loads(raw)
+        declared_length = response.headers.get("Content-Length")
+        if declared_length and int(declared_length) > MAX_RESPONSE_BYTES:
+            raise ValueError("API 响应超过 8 MB 安全上限")
+        raw_bytes = response.read(MAX_RESPONSE_BYTES + 1)
+    if len(raw_bytes) > MAX_RESPONSE_BYTES:
+        raise ValueError("API 响应超过 8 MB 安全上限")
+    return json.loads(raw_bytes.decode("utf-8-sig"))
 
 
 def fetch_models(base_url, api_key, timeout=20):
@@ -164,7 +327,24 @@ def fetch_models(base_url, api_key, timeout=20):
     return [item["id"] for item in data.get("data", []) if item.get("id")]
 
 
-def build_export(provider):
+def open_macos_privacy_settings():
+    if sys.platform != "darwin":
+        raise RuntimeError("隐私设置入口仅适用于 macOS")
+    urls = [
+        "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension",
+        "x-apple.systempreferences:com.apple.preference.security?General",
+    ]
+    last_error = None
+    for url in urls:
+        try:
+            subprocess.run(["open", url], check=True)
+            return url
+        except (OSError, subprocess.CalledProcessError) as error:
+            last_error = error
+    raise RuntimeError("无法自动打开隐私与安全性设置") from last_error
+
+
+def build_export(provider, include_api_key=False):
     env_name = "%s_API_KEY" % provider["key"].upper()
     return {
         "app": "WorkBuddy",
@@ -176,7 +356,8 @@ def build_export(provider):
             "wire_api": provider["wire_api"],
             "model": provider["model"],
             "api_key_env": env_name,
-            "api_key": provider.get("api_key", ""),
+            "api_key": provider.get("api_key", "") if include_api_key else "",
+            "api_key_included": bool(include_api_key and provider.get("api_key")),
             "notes": provider.get("notes", ""),
         },
         "usage": {
@@ -187,13 +368,13 @@ def build_export(provider):
     }
 
 
-def export_provider(provider, path=None):
+def export_provider(provider, path=None, include_api_key=False):
     ensure_dirs()
     if not path:
         stamp = time.strftime("%Y%m%d-%H%M%S")
         path = os.path.join(EXPORT_DIR, "%s-%s.json" % (provider["key"], stamp))
     with open(path, "w", encoding="utf-8") as f:
-        json.dump(build_export(provider), f, ensure_ascii=False, indent=2)
+        json.dump(build_export(provider, include_api_key), f, ensure_ascii=False, indent=2)
     return path
 
 
@@ -294,6 +475,8 @@ class App:
         self.refresh_list()
         self.log("已加载 %d 个供应商配置" % len(self.providers))
         self.log("配置保存位置: %s" % PROVIDERS_FILE)
+        if sys.platform == "darwin":
+            self.root.after(500, self.show_macos_privacy_prompt)
 
     def setup_style(self):
         style = ttk.Style()
@@ -319,7 +502,9 @@ class App:
         titlebox.pack(side="left", pady=13)
         ttk.Label(titlebox, text=APP_NAME, style="Title.TLabel").pack(anchor="w")
         ttk.Label(titlebox, text="OpenAI-compatible 第三方 AI API 配置与连通性管理", style="SubTitle.TLabel").pack(anchor="w")
-        ttk.Button(header, text="刷新状态", command=self.refresh_status).pack(side="right", padx=18, pady=22)
+        ttk.Button(header, text="刷新状态", command=self.refresh_status).pack(side="right", padx=(8, 18), pady=22)
+        if sys.platform == "darwin":
+            ttk.Button(header, text="隐私设置", command=self.open_privacy_settings).pack(side="right", padx=0, pady=22)
 
         body = tk.Frame(self.root, bg="#f4f6f9")
         body.pack(fill="both", expand=True, padx=16, pady=14)
@@ -430,8 +615,10 @@ class App:
         if not item["name"] or not item["base_url"] or not item["model"]:
             messagebox.showwarning("提示", "显示名称、API Base URL、默认模型均为必填")
             return False
-        if not item["base_url"].startswith(("http://", "https://")):
-            messagebox.showwarning("提示", "API Base URL 必须以 http:// 或 https:// 开头")
+        try:
+            validate_remote_url(item["base_url"])
+        except ValueError as error:
+            messagebox.showwarning("提示", str(error))
             return False
         return True
 
@@ -493,9 +680,13 @@ class App:
             messagebox.showwarning("提示", "请先填写 API Base URL")
             return
         self.log("正在请求 %s/models ..." % item["base_url"])
-        threading.Thread(target=self._fetch_models_worker, args=(item["base_url"], item["api_key"]), daemon=True).start()
+        threading.Thread(
+            target=self._fetch_models_worker,
+            args=(item["key"], item["base_url"], item["api_key"]),
+            daemon=True,
+        ).start()
 
-    def _fetch_models_worker(self, base_url, api_key):
+    def _fetch_models_worker(self, provider_key, base_url, api_key):
         try:
             models = fetch_models(base_url, api_key)
         except urllib.error.HTTPError as error:
@@ -504,17 +695,20 @@ class App:
         except Exception as error:
             self.log("模型拉取失败: %s" % error)
             return
-        self.root.after(0, lambda: self.apply_models(models))
+        self.root.after(0, lambda: self.apply_models(provider_key, models))
 
-    def apply_models(self, models):
-        self.model_combo["values"] = models
-        if models and not self.vars["model"].get():
-            self.vars["model"].set(models[0])
-        item = self.current_provider()
-        if item:
-            item["models"] = models
-            save_providers(self.providers)
-        self.log("模型拉取成功，共 %d 个" % len(models))
+    def apply_models(self, provider_key, models):
+        item = next((provider for provider in self.providers if provider.get("key") == provider_key), None)
+        if not item:
+            self.log("模型拉取结果已丢弃：供应商已删除")
+            return
+        item["models"] = models
+        save_providers(self.providers)
+        if self.selected_key == provider_key:
+            self.model_combo["values"] = models
+            if models and not self.vars["model"].get():
+                self.vars["model"].set(models[0])
+        self.log("「%s」模型拉取成功，共 %d 个" % (item.get("name", provider_key), len(models)))
 
     def import_all_models_to_workbuddy(self):
         item = self.collect_current()
@@ -574,9 +768,17 @@ class App:
             initialfile="%s-workbuddy-aip.json" % item["key"], filetypes=[("JSON", "*.json")])
         if not path:
             return
-        export_provider(item, path)
-        self.log("已导出配置：%s" % path)
-        messagebox.showinfo("导出完成", "配置已导出到：\n%s" % path)
+        include_api_key = False
+        if item.get("api_key"):
+            include_api_key = messagebox.askyesno(
+                "导出 API Key",
+                "默认导出会移除 API Key，避免配置文件泄露。\n\n是否明确将 API Key 写入导出文件？",
+                parent=self.root,
+            )
+        export_provider(item, path, include_api_key=include_api_key)
+        self.log("已导出配置%s：%s" % ("（含 API Key）" if include_api_key else "（已脱敏）", path))
+        messagebox.showinfo("导出完成", "配置已导出到：\n%s\n\n%s" % (
+            path, "文件包含 API Key，请妥善保管。" if include_api_key else "API Key 已移除。"))
 
     def manage_backups(self):
         ensure_dirs()
@@ -622,6 +824,29 @@ class App:
             self.log("当前供应商：%s / %s" % (item.get("name"), item.get("model")))
         else:
             self.log("当前未设置活动供应商")
+
+    def show_macos_privacy_prompt(self):
+        if not messagebox.askyesno(
+            "macOS 隐私与安全性设置",
+            "如果系统提示无法验证开发者或阻止打开，请点击“是”进入“隐私与安全性”，然后在安全性区域点击“仍要打开”。\n\n现在打开隐私设置吗？",
+            parent=self.root,
+        ):
+            self.log("可随时点击窗口右上角“隐私设置”重新打开系统设置")
+            return
+        self.open_privacy_settings()
+
+    def open_privacy_settings(self):
+        try:
+            open_macos_privacy_settings()
+            self.log("已打开 macOS“隐私与安全性”设置")
+            messagebox.showinfo(
+                "隐私设置已打开",
+                "请在“安全性”区域找到被拦截的应用，点击“仍要打开”，再返回重新启动工具。",
+                parent=self.root,
+            )
+        except Exception as error:
+            self.log("打开隐私设置失败: %s" % error)
+            messagebox.showerror("打开失败", "%s\n\n请手动打开：系统设置 > 隐私与安全性。" % error, parent=self.root)
 
     def open_path(self, path):
         try:

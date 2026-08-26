@@ -1,4 +1,4 @@
-WorkBuddy 第三方 AIP 对接工具 v1.4
+WorkBuddy 第三方 AIP 对接工具 V1.21
 Intel 芯片版（macOS Ventura 13 及以上）
 
 【正确安装】
@@ -16,8 +16,12 @@ Intel 芯片版（macOS Ventura 13 及以上）
 系统设置 → 隐私与安全性 → 安全性 → 找到该应用 → 点击“仍要打开”。
 
 说明：
+- 应用启动后会弹窗询问是否打开“隐私与安全性”，也可点击窗口右上角“隐私设置”。
+- 使用圆形苏苏 SS 图标，圆形以外区域透明。
 - 该工具不需要摄像头、麦克风、屏幕录制或辅助功能权限。
 - “隐私与安全性”提示属于 macOS 对未公证第三方应用的 Gatekeeper 保护，不是工具在读取隐私数据。
 - v1.4 修复包由 macOS Intel 构建机直接使用 ditto 打包，保留 .app 主入口执行权限；请勿在 Windows 上解压后重新压缩。
-- v1.4 内置 certifi/Mozilla 可信 CA 证书包，修复 OpenKun 拉取模型和连接测试的 SSL 证书链错误；HTTPS 仍执行严格证书与主机名校验，不会绕过安全验证。
+- 内置 certifi/Mozilla 可信 CA 证书包，OpenKun 拉取模型和连接测试使用严格证书与主机名校验。
+- V1.21 将 API Key 保存到当前 macOS 用户的系统钥匙串；providers.json 仅保存钥匙串引用。JSON 导出默认不包含 API Key。
+- 远程 API 必须使用 HTTPS，只有 localhost 本地服务允许 HTTP。
 - 工具数据位于 ~/.workbuddy/workbuddy-aip/，WorkBuddy 模型文件位于 ~/.workbuddy/models.json。

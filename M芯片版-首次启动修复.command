@@ -2,16 +2,16 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-APP="$SCRIPT_DIR/WorkBuddy第三方AIP对接工具-Intel芯片.app"
-BIN="$APP/Contents/MacOS/WorkBuddy第三方AIP对接工具-Intel芯片"
+APP="$SCRIPT_DIR/WorkBuddy第三方AIP对接工具-M芯片.app"
+BIN="$APP/Contents/MacOS/WorkBuddy第三方AIP对接工具-M芯片"
 
 if [[ ! -d "$APP" ]]; then
   osascript -e 'display alert "未找到应用" message "请把首次启动修复.command 与 WorkBuddy 第三方 AIP 对接工具放在同一个文件夹中。" as critical'
   exit 1
 fi
 
-if [[ "$(uname -m)" != "x86_64" ]]; then
-  osascript -e 'display alert "芯片版本不匹配" message "此版本仅适用于 Intel Mac。M1/M2/M3/M4 请使用 M 芯片版。" as critical'
+if [[ "$(uname -m)" != "arm64" ]]; then
+  osascript -e 'display alert "芯片版本不匹配" message "此版本仅适用于 Apple Silicon（M1/M2/M3/M4）Mac。Intel Mac 请使用 Intel 芯片版。" as critical'
   exit 1
 fi
 
