@@ -137,7 +137,8 @@ def main():
             else:
                 raise AssertionError("curl HTTP 401 was not preserved")
 
-        assert module.normalize_api_key("  Bearer plain-secret  ") == "plain-secret"
+        assert module.normalize_api_key("  Bearer Bearer plain-secret  ") == "plain-secret"
+        assert "\n" not in module._security_quote("safe\nshow-keychain-info")
         assert module.api_key_status("") == "未配置"
         assert "长度 12" in module.api_key_status("plain-secret")
         assert "重新输入有效 Key" in module.authentication_error_message(401, "Unauthorized")

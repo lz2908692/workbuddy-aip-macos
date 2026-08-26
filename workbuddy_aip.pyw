@@ -138,6 +138,7 @@ def _keychain_account(provider_key, value):
 
 
 def _security_quote(value):
+    value = str(value).replace("\r", "").replace("\n", "")
     return '"%s"' % value.replace("\\", "\\\\").replace('"', '\\"')
 
 
@@ -202,7 +203,7 @@ def unprotect_secret(value):
 def normalize_api_key(value):
     """Normalize a copied key without changing valid interior characters."""
     value = str(value or "").strip()
-    if value.lower().startswith("bearer "):
+    while value.lower().startswith("bearer "):
         value = value[7:].strip()
     return value
 
@@ -935,9 +936,20 @@ class App:
                     restored = json.load(f)
                 if not isinstance(restored, list) or not restored:
                     raise ValueError("备份格式无效")
-                save_providers(restored)
-                self.providers = restored
-                self.selected_key = restored[0].get("key")
+                restored_runtime = []
+                for stored_provider in restored:
+                    if not isinstance(stored_provider, dict):
+                        continue
+                    provider = copy.deepcopy(stored_provider)
+                    secret = provider.get("api_key", "")
+                    if secret.startswith((SECRET_PREFIX, KEYCHAIN_PREFIX)):
+                        provider["api_key"] = unprotect_secret(secret)
+                    restored_runtime.append(provider)
+                if not restored_runtime:
+                    raise ValueError("备份中没有有效的供应商配置")
+                save_providers(restored_runtime)
+                self.providers = restored_runtime
+                self.selected_key = restored_runtime[0].get("key")
                 self.refresh_list()
                 self.log("已恢复备份：%s" % files[selection[0]])
                 win.destroy()
