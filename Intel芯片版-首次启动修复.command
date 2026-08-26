@@ -24,8 +24,6 @@ if ! codesign --verify --deep --strict "$APP" 2>/dev/null; then
   exit 1
 fi
 
-open "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension" 2>/dev/null || \
-  open "x-apple.systempreferences:com.apple.preference.security?General" 2>/dev/null || true
-osascript -e 'display dialog "已打开系统设置的“隐私与安全性”。如果看到被拦截的 WorkBuddy 工具，请在安全性区域点击“仍要打开”，然后返回重新启动应用。" buttons {"稍后", "启动应用"} default button "启动应用" with title "WorkBuddy 中转站工具 V1.21" with icon caution'
+osascript -e 'display dialog "执行权限、隔离标记和应用签名已修复。现在可以启动 WorkBuddy 工具；如系统仍拦截，请在应用右上角点击“隐私设置”。" buttons {"启动应用"} default button "启动应用" with title "WorkBuddy 中转站工具 V1.24" with icon note'
 open "$APP"
-osascript -e 'display notification "已修复执行权限并打开隐私设置" with title "WorkBuddy 中转站工具 V1.21"'
+osascript -e 'display notification "已修复执行权限并启动应用" with title "WorkBuddy 中转站工具 V1.24"'

@@ -1,4 +1,4 @@
-WorkBuddy 第三方 AIP 对接工具 v1.4
+WorkBuddy 第三方 AIP 对接工具 V1.24
 
 一、版本说明
 - Windows 版：适用于 Windows 10/11
@@ -15,7 +15,11 @@ WorkBuddy 第三方 AIP 对接工具 v1.4
 5. 一键将已拉取的全部模型批量写入 WorkBuddy 的 models.json；同名模型更新，其他已有模型保留，写入前自动备份。空文件会自动初始化；损坏或无效 JSON 会先备份再自动重建。
 6. 设置当前供应商，配置自动备份。
 7. 导出 WorkBuddy AIP JSON 配置，便于后续在 WorkBuddy 连接器或自定义服务中使用。
-8. v1.4 内置 certifi/Mozilla 可信 CA 证书包，修复部分 Intel Mac 请求 OpenKun 时的证书链错误；HTTPS 始终严格校验证书和主机名。
+8. 内置 certifi/Mozilla 可信 CA 证书包；HTTPS 始终严格校验证书和主机名。
+9. Windows 使用 DPAPI、macOS 使用系统钥匙串保护 API Key；旧版明文配置首次启动自动备份并迁移。
+10. Intel/M 芯片版提供按需隐私设置弹窗、窗口内“隐私设置”按钮和首次启动修复程序；成功读取模型名称后不再自动弹窗。
+11. V1.24 修复 macOS Dock 双图标，并统一使用方框背景完全透明的蓝色苏苏 SS 图标。
+12. 远程服务强制 HTTPS，本机 localhost 可使用 HTTP；API 响应限制为 8 MB。
 
 三、使用步骤
 1. 双击对应平台版本启动。
@@ -36,8 +40,8 @@ WorkBuddy 第三方 AIP 对接工具 v1.4
 - WorkBuddy 模型备份：%USERPROFILE%\\.workbuddy\\model-backups/
 
 五、安全提示
-- API Key 保存在本机用户目录的 providers.json 中，请勿把该文件上传到公开仓库。
-- 导出的 JSON 包含 API Key，分享前请确认是否需要删除 provider.api_key 字段。
+- Windows 的 API Key 由当前用户 DPAPI 加密；macOS 的 API Key 存入系统钥匙串。providers.json 不再保存明文 Key。
+- 导出 JSON 默认移除 API Key；仅在二次确认后才会导出明文 Key，含 Key 文件请勿上传或转发。
 - 批量配置功能会修改 WorkBuddy 的自定义模型文件 models.json，并在修改前自动备份；导入后必须重启 WorkBuddy 才会刷新模型列表。
 
 六、macOS Intel 首次启动

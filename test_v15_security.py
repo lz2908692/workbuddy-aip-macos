@@ -35,13 +35,23 @@ def load_module():
 
 def main():
     module = load_module()
-    assert module.APP_VERSION == "1.23"
+    assert module.APP_VERSION == "1.24"
 
     with tempfile.TemporaryDirectory(prefix="workbuddy-aip-v15-") as temp_dir:
         module.DATA_DIR = temp_dir
         module.PROVIDERS_FILE = os.path.join(temp_dir, "providers.json")
         module.BACKUP_DIR = os.path.join(temp_dir, "backups")
         module.EXPORT_DIR = os.path.join(temp_dir, "exports")
+        module.APP_STATE_FILE = os.path.join(temp_dir, "app-state.json")
+        assert module.has_successful_model_fetch() is False
+        assert module.mark_successful_model_fetch([]) is False
+        assert module.mark_successful_model_fetch(["", "   ", None]) is False
+        assert not Path(module.APP_STATE_FILE).exists()
+        assert module.mark_successful_model_fetch([" gpt-test "]) is True
+        assert module.has_successful_model_fetch() is True
+        state = json.loads(Path(module.APP_STATE_FILE).read_text(encoding="utf-8"))
+        assert state["model_fetch_succeeded"] is True
+        assert state["model_fetch_succeeded_at"]
         provider = {
             "key": "openkun",
             "name": "OpenKun",

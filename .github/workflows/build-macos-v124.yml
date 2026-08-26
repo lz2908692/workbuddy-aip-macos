@@ -1,0 +1,160 @@
+name: Build WorkBuddy AIP V1.24 macOS
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            architecture: x64
+            arch: x86_64
+            label: Intel芯片
+            release_dir: release-intel
+            repair_script: Intel芯片版-首次启动修复.command
+            guide: Intel芯片版-使用说明.txt
+          - runner: macos-15
+            architecture: arm64
+            arch: arm64
+            label: M芯片
+            release_dir: release-arm64
+            repair_script: M芯片版-首次启动修复.command
+            guide: M芯片版-使用说明.txt
+    runs-on: ${{ matrix.runner }}
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+      BUNDLE_ID: "com.susu.workbuddy-aip"
+      APP_NAME: "WorkBuddy第三方AIP对接工具-${{ matrix.label }}"
+      ZIP_NAME: "WorkBuddy第三方AIP对接工具-${{ matrix.label }}版-V1.24.zip"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: ${{ matrix.architecture }}
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip pyinstaller pillow certifi
+      - name: Run regressions
+        run: |
+          python -m py_compile workbuddy_aip.pyw test_ssl_regression.py test_v15_security.py test_openkun_https_live.py test_macos_icon.py
+          python test_ssl_regression.py
+          python test_v15_security.py
+      - name: Generate and validate transparent icon
+        run: |
+          python generate_icon_macos.py
+          python test_macos_icon.py
+          iconutil -c icns icon.iconset -o susu_icon.icns
+          rm -rf icns-check.iconset
+          iconutil -c iconset susu_icon.icns -o icns-check.iconset
+          python - <<'PY'
+          from pathlib import Path
+          from PIL import Image
+          files = sorted(Path("icns-check.iconset").glob("*.png"))
+          assert files
+          for path in files:
+              image = Image.open(path).convert("RGBA")
+              width, height = image.size
+              for point in ((0, 0), (width - 1, 0), (0, height - 1), (width - 1, height - 1)):
+                  assert image.getpixel(point) == (0, 0, 0, 0), (path, point, image.getpixel(point))
+          print("ICNS_TRANSPARENCY_OK")
+          PY
+      - name: Build application
+        run: |
+          python -m PyInstaller \
+            --noconfirm \
+            --clean \
+            --onedir \
+            --windowed \
+            --name "$APP_NAME" \
+            --osx-bundle-identifier "$BUNDLE_ID" \
+            --icon susu_icon.icns \
+            --add-data "susu_icon_512.png:." \
+            --collect-data certifi \
+            --distpath dist \
+            --workpath build \
+            workbuddy_aip.pyw
+      - name: Prepare and verify release
+        run: |
+          set -euo pipefail
+          APP="dist/$APP_NAME.app"
+          BIN="$APP/Contents/MacOS/$APP_NAME"
+          chmod 755 "$BIN"
+          /usr/libexec/PlistBuddy -c "Delete :CFBundleIdentifier" "$APP/Contents/Info.plist" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Delete :CFBundleShortVersionString" "$APP/Contents/Info.plist" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Delete :CFBundleVersion" "$APP/Contents/Info.plist" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string $BUNDLE_ID" "$APP/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string 1.24" "$APP/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string 1.24.0" "$APP/Contents/Info.plist"
+          ICON_FILE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$APP/Contents/Info.plist")"
+          case "$ICON_FILE" in *.icns) ;; *) ICON_FILE="$ICON_FILE.icns" ;; esac
+          test -s "$APP/Contents/Resources/$ICON_FILE"
+          test -s "$APP/Contents/Resources/susu_icon_512.png"
+          rm -rf bundle-icon-check.iconset
+          iconutil -c iconset "$APP/Contents/Resources/$ICON_FILE" -o bundle-icon-check.iconset
+          python - <<'PY'
+          from pathlib import Path
+          from PIL import Image
+          files = sorted(Path("bundle-icon-check.iconset").glob("*.png"))
+          assert files
+          for path in files:
+              image = Image.open(path).convert("RGBA")
+              width, height = image.size
+              for point in ((0, 0), (width - 1, 0), (0, height - 1), (width - 1, height - 1)):
+                  assert image.getpixel(point) == (0, 0, 0, 0), (path, point, image.getpixel(point))
+          print("BUNDLE_ICON_TRANSPARENCY_OK")
+          PY
+          codesign --force --deep --sign - "$APP"
+          test -x "$BIN"
+          test "$(lipo -archs "$BIN")" = "${{ matrix.arch }}"
+          "$BIN" --self-test-tls
+          python - <<'PY'
+          import json
+          import subprocess
+          result = subprocess.run([
+              "/usr/bin/curl", "-q", "--silent", "--show-error",
+              "--proto", "=https", "--proto-redir", "=https",
+              "--connect-timeout", "20", "--max-time", "30",
+              "--header", "Accept: application/json",
+              "https://openkun.xyz/v1/models",
+          ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+          if result.returncode not in (0, 22):
+              raise SystemExit(result.stderr.decode("utf-8", errors="replace"))
+          if result.stdout:
+              payload = json.loads(result.stdout.decode("utf-8-sig"))
+              assert isinstance(payload, dict)
+          print("OPENKUN_TLS_REACHABLE")
+          PY
+          plutil -lint "$APP/Contents/Info.plist"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          mkdir -p "${{ matrix.release_dir }}"
+          ditto "$APP" "${{ matrix.release_dir }}/$APP_NAME.app"
+          cp "${{ matrix.repair_script }}" "${{ matrix.release_dir }}/"
+          cp "${{ matrix.guide }}" "${{ matrix.release_dir }}/"
+          chmod 755 "${{ matrix.release_dir }}/${{ matrix.repair_script }}"
+          ditto -c -k --sequesterRsrc --keepParent "${{ matrix.release_dir }}" "$ZIP_NAME"
+          mkdir archive-check
+          ditto -x -k "$ZIP_NAME" archive-check
+          CHECK_APP="archive-check/${{ matrix.release_dir }}/$APP_NAME.app"
+          CHECK_BIN="$CHECK_APP/Contents/MacOS/$APP_NAME"
+          test -x "$CHECK_BIN"
+          test "$(lipo -archs "$CHECK_BIN")" = "${{ matrix.arch }}"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$CHECK_APP/Contents/Info.plist")" = "1.24"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$CHECK_APP/Contents/Info.plist")" = "1.24.0"
+          "$CHECK_BIN" --self-test-tls
+          codesign --verify --deep --strict --verbose=2 "$CHECK_APP"
+          shasum -a 256 "$ZIP_NAME" | tee "$ZIP_NAME.sha256.txt"
+      - name: Upload release
+        uses: actions/upload-artifact@v4
+        with:
+          name: WorkBuddy第三方AIP对接工具-${{ matrix.label }}版-V1.24
+          path: |
+            ${{ env.ZIP_NAME }}
+            ${{ env.ZIP_NAME }}.sha256.txt
+          if-no-files-found: error
+          retention-days: 30

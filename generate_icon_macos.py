@@ -41,12 +41,19 @@ def render_icon(size):
     x = (canvas - width) // 2 - box[0]
     y = (canvas - height) // 2 - box[1] - int(canvas * 0.015)
     draw.text((x, y), "SS", font=font, fill=(255, 255, 255, 255))
-    return image.resize((size, size), Image.Resampling.LANCZOS)
+    result = image.resize((size, size), Image.Resampling.LANCZOS)
+    pixels = result.load()
+    for y in range(size):
+        for x in range(size):
+            red, green, blue, alpha = pixels[x, y]
+            if alpha < 32:
+                pixels[x, y] = (0, 0, 0, 0)
+    return result
 
 
 for size in (16, 32, 128, 256, 512):
     image = render_icon(size)
     image.save(os.path.join(ICONSET, "icon_%dx%d.png" % (size, size)))
-    if size <= 256:
-        render_icon(size * 2).save(os.path.join(ICONSET, "icon_%dx%d@2x.png" % (size, size)))
+    render_icon(size * 2).save(os.path.join(ICONSET, "icon_%dx%d@2x.png" % (size, size)))
+render_icon(512).save(os.path.join(ROOT, "susu_icon_512.png"))
 print(ICONSET)

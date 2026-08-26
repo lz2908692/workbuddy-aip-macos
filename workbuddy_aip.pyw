@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""WorkBuddy Third-Party AI Provider Manager V1.23."""
+"""WorkBuddy Third-Party AI Provider Manager V1.24."""
 
 import base64
 import copy
@@ -25,7 +25,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 APP_NAME = "WorkBuddy 第三方 AIP 对接工具"
-APP_VERSION = "1.23"
+APP_VERSION = "1.24"
 APP_SLUG = "workbuddy-aip"
 WIRE_RESPONSES = "responses"
 WIRE_CHAT = "chat_completions"
@@ -39,6 +39,7 @@ DATA_DIR = os.path.join(os.path.expanduser("~"), ".workbuddy", APP_SLUG)
 PROVIDERS_FILE = os.path.join(DATA_DIR, "providers.json")
 BACKUP_DIR = os.path.join(DATA_DIR, "backups")
 EXPORT_DIR = os.path.join(DATA_DIR, "exports")
+APP_STATE_FILE = os.path.join(DATA_DIR, "app-state.json")
 WORKBUDDY_MODELS_FILE = os.path.join(os.path.expanduser("~"), ".workbuddy", "models.json")
 WORKBUDDY_MODELS_BACKUP_DIR = os.path.join(os.path.expanduser("~"), ".workbuddy", "model-backups")
 
@@ -85,8 +86,50 @@ def ensure_dirs():
     os.makedirs(EXPORT_DIR, exist_ok=True)
 
 
+def resource_path(relative_path):
+    base_path = getattr(sys, "_MEIPASS", ROOT_DIR)
+    return os.path.join(base_path, relative_path)
+
+
 def clone_defaults():
     return copy.deepcopy(DEFAULT_PROVIDERS)
+
+
+def load_app_state():
+    ensure_dirs()
+    try:
+        with open(APP_STATE_FILE, "r", encoding="utf-8-sig") as f:
+            state = json.load(f)
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+        return {}
+    return state if isinstance(state, dict) else {}
+
+
+def save_app_state(state):
+    ensure_dirs()
+    tmp = APP_STATE_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, APP_STATE_FILE)
+
+
+def has_successful_model_fetch():
+    return bool(load_app_state().get("model_fetch_succeeded"))
+
+
+def mark_successful_model_fetch(models):
+    valid_models = [
+        model_id.strip()
+        for model_id in models
+        if isinstance(model_id, str) and model_id.strip()
+    ]
+    if not valid_models:
+        return False
+    state = load_app_state()
+    state["model_fetch_succeeded"] = True
+    state["model_fetch_succeeded_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    save_app_state(state)
+    return True
 
 
 def _protect_windows_secret(value):
@@ -437,7 +480,14 @@ def fetch_models(base_url, api_key, timeout=20):
     if not api_key:
         raise ValueError("未配置 API Key。请在供应商信息中输入 Key，点击“保存配置”后再试。")
     data = request_json(base_url.rstrip("/") + "/models", api_key, timeout)
-    return [item["id"] for item in data.get("data", []) if item.get("id")]
+    models = []
+    for item in data.get("data", []):
+        if not isinstance(item, dict):
+            continue
+        model_id = item.get("id")
+        if isinstance(model_id, str) and model_id.strip():
+            models.append(model_id.strip())
+    return models
 
 
 def open_macos_privacy_settings():
@@ -583,13 +633,22 @@ class App:
         root.geometry("980x680")
         root.minsize(860, 580)
         root.configure(bg="#f4f6f9")
+        if sys.platform == "darwin":
+            try:
+                self.dock_icon = tk.PhotoImage(file=resource_path("susu_icon_512.png"))
+                root.iconphoto(True, self.dock_icon)
+            except (OSError, tk.TclError) as error:
+                self.dock_icon = None
+                print("macOS runtime icon unavailable: %s" % error, file=sys.stderr)
         self.setup_style()
         self.build_ui()
         self.refresh_list()
         self.log("已加载 %d 个供应商配置" % len(self.providers))
         self.log("配置保存位置: %s" % PROVIDERS_FILE)
-        if sys.platform == "darwin":
+        if sys.platform == "darwin" and not has_successful_model_fetch():
             self.root.after(500, self.show_macos_privacy_prompt)
+        elif sys.platform == "darwin":
+            self.log("已成功读取过模型名称，不再自动显示隐私设置提示")
 
     def setup_style(self):
         style = ttk.Style()
@@ -828,13 +887,22 @@ class App:
         if not item:
             self.log("模型拉取结果已丢弃：供应商已删除")
             return
+        if not models:
+            self.log("「%s」模型接口请求成功，但未返回可用模型名称" % item.get("name", provider_key))
+            return
         item["models"] = models
         save_providers(self.providers)
         if self.selected_key == provider_key:
             self.model_combo["values"] = models
-            if models and not self.vars["model"].get():
+            if not self.vars["model"].get():
                 self.vars["model"].set(models[0])
-        self.log("「%s」模型拉取成功，共 %d 个" % (item.get("name", provider_key), len(models)))
+        try:
+            mark_successful_model_fetch(models)
+        except OSError as error:
+            self.log("模型已读取，但隐私提示状态保存失败：%s" % error)
+        self.log("「%s」模型拉取成功，共 %d 个；后续启动不再自动显示隐私设置提示" % (
+            item.get("name", provider_key), len(models)
+        ))
 
     def import_all_models_to_workbuddy(self):
         item = self.collect_current()
